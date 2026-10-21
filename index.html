@@ -24,7 +24,7 @@
           alt="케로로 얼굴"
         >
         <div class="logo">
-          ケロロと日本語
+          <span lang="ja">ケロロと日本語</span>
           <small>작전명: 퍼렁별 단어 완전 정복!</small>
         </div>
       </div>
@@ -123,8 +123,8 @@
         <div id="questionArea" class="question-area">
           <div class="word-area">
             <span class="badge" id="wordBadge">JLPT N2 · 단어</span>
-            <div class="word" id="word">慎重</div>
-            <div class="reading" id="reading">しんちょう</div>
+            <div class="word" id="word" lang="ja">慎重</div>
+            <div class="reading" id="reading" lang="ja">しんちょう</div>
 
             <p class="question">
               이 단어의 뜻을 골라 주십시오. 작전 개시입니다!
@@ -176,7 +176,11 @@
           hidden
           aria-live="polite"
         >
-          <img class="complete-icon" src="complete.png" alt="작전을 마친 케로로">
+          <img
+            class="complete-icon"
+            src="complete.png"
+            alt="작전을 마친 케로로"
+          >
           <h2 id="completeTitle">오늘의 작전이 종료되었습니다!</h2>
           <p id="completeText"></p>
 
