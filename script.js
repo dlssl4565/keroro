@@ -1057,16 +1057,28 @@ N1: [
 ]
 };
 
+// 같은 레벨에서 표기가 중복된 항목은 첫 항목만 남깁니다.
+for (const jlptLevel of Object.keys(bank)) {
+  const seenInLevel = new Set();
+  bank[jlptLevel] = bank[jlptLevel].filter(item => {
+    if (seenInLevel.has(item.w)) {
+      console.warn(`중복 단어 제외: ${jlptLevel} ${item.w}`);
+      return false;
+    }
+    seenInLevel.add(item.w);
+    return true;
+  });
+}
+
 const $ = id => document.getElementById(id);
 const QUESTION_LIMIT = 10;
-const STORAGE_KEYS = { wrong: 'kotoba_wrong', stats: 'kotoba_stats', daily: 'kotoba_daily' };
+const STORAGE_KEYS = { wrong: 'kotoba_wrong', stats: 'kotoba_stats', daily: 'kotoba_daily', seen: 'kotoba_seen_v1' };
 let level = 'N2';
 let questions = [];
 let index = 0;
 let answered = false;
 let correctCount = 0;
 let reviewMode = false;
-let currentSessionId = 0;
 
 function loadJSON(key, fallback) {
   try {
@@ -1085,19 +1097,23 @@ function normalizedStats(value) {
   return {
     total: Number.isFinite(data.total) && data.total >= 0 ? data.total : 0,
     correct: Number.isFinite(data.correct) && data.correct >= 0 ? data.correct : 0,
-    mastered: Array.isArray(data.mastered) ? [...new Set(data.mastered.filter(x => typeof x === 'string'))] : []
+    mastered: Array.isArray(data.mastered) ? [...new Set(data.mastered.filter(x => typeof x === 'string'))] : [],
+    streaks: data.streaks && typeof data.streaks === 'object' && !Array.isArray(data.streaks) ? data.streaks : {}
   };
 }
 let wrong = normalizedWrong(loadJSON(STORAGE_KEYS.wrong, {}));
 let stats = normalizedStats(loadJSON(STORAGE_KEYS.stats, {}));
 let daily = loadJSON(STORAGE_KEYS.daily, {});
 if (!daily || typeof daily !== 'object' || Array.isArray(daily)) daily = {};
+let seenWords = loadJSON(STORAGE_KEYS.seen, {});
+if (!seenWords || typeof seenWords !== 'object' || Array.isArray(seenWords)) seenWords = {};
 
 function save() {
   try {
     localStorage.setItem(STORAGE_KEYS.wrong, JSON.stringify(wrong));
     localStorage.setItem(STORAGE_KEYS.stats, JSON.stringify(stats));
     localStorage.setItem(STORAGE_KEYS.daily, JSON.stringify(daily));
+    localStorage.setItem(STORAGE_KEYS.seen, JSON.stringify(seenWords));
   } catch (error) {
     console.warn('학습 기록을 저장하지 못했습니다.', error);
   }
@@ -1148,19 +1164,39 @@ function setActiveLevelButtons() {
   });
 }
 function selectLevel(newLevel) {
-  if (!bank[newLevel]) return;
+  if (!bank[newLevel] || newLevel === level) return;
+  if ((index > 0 || answered) && !window.confirm('현재 훈련을 끝내지 않고 레벨을 바꾸시겠습니까?')) {
+    setActiveLevelButtons();
+    return;
+  }
   level = newLevel;
   reviewMode = false;
   setActiveLevelButtons();
   startQuiz();
 }
 function startQuiz() {
-  currentSessionId++;
   if (reviewMode) {
     questions = shuffle(Object.values(wrong)).map(item => ({ ...item, level: item.level || level }));
   } else {
-    questions = shuffle(bank[level]).slice(0, QUESTION_LIMIT).map(item => ({ ...item, level }));
+    const pool = bank[level] || [];
+    const seen = new Set(seenWords[level] || []);
+    let available = shuffle(pool.filter(item => !seen.has(item.w)));
+
+    // 이 레벨의 단어를 모두 출제한 뒤에 새 회차를 시작합니다.
+    if (available.length === 0 && pool.length > 0) {
+      seenWords[level] = [];
+      available = shuffle(pool);
+    }
+
+    questions = available.slice(0, QUESTION_LIMIT).map(item => ({ ...item, level }));
+    seenWords[level] = [...new Set([...(seenWords[level] || []), ...questions.map(item => item.w)])];
+    try {
+      localStorage.setItem(STORAGE_KEYS.seen, JSON.stringify(seenWords));
+    } catch (error) {
+      console.warn('출제 기록을 저장하지 못했습니다.', error);
+    }
   }
+
   index = 0;
   correctCount = 0;
   answered = false;
@@ -1214,19 +1250,29 @@ function renderQuestion() {
     choices.appendChild(button);
   });
 }
+function wordId(item) {
+  return `${item.level || level}:${item.w}`;
+}
 function chooseAnswer(meaning, selectedButton) {
   if (answered) return;
   answered = true;
   const q = questions[index];
   const isCorrect = meaning === q.m;
+  const id = wordId(q);
   if (isCorrect) {
     correctCount++;
     stats.correct++;
-    stats.mastered = [...new Set([...stats.mastered, q.w])];
+    // 같은 단어를 세 번 연속 맞힌 경우에만 숙달 단어로 기록합니다.
+    stats.streaks[id] = (stats.streaks[id] || 0) + 1;
+    if (stats.streaks[id] >= 3) {
+      stats.mastered = [...new Set([...stats.mastered, id])];
+    }
     // 정답을 맞힌 단어는 오답 기록에서 해제합니다.
-    delete wrong[q.w];
+    delete wrong[id];
   } else {
-    wrong[q.w] = { ...q, level: q.level || level };
+    stats.streaks[id] = 0;
+    stats.mastered = stats.mastered.filter(masteredId => masteredId !== id);
+    wrong[id] = { ...q, level: q.level || level };
   }
   stats.total++;
   save();
@@ -1257,6 +1303,7 @@ updateProgress(index + 1, questions.length);
 $('nextButton').disabled = false;
 $('nextButton').textContent =
   index + 1 >= questions.length ? '훈련 결과 확인' : '다음 단어로 이동';
+$('nextButton').focus();
 }
 function nextQuestion() {
   if (!answered) return;
@@ -1338,6 +1385,15 @@ $('reviewButton').addEventListener('click', startReview);
 $('clearWrongButton').addEventListener('click', clearWrong);
 $('restartButton').addEventListener('click', () => { reviewMode = false; startQuiz(); });
 $('reviewFromComplete').addEventListener('click', startReview);
+
+document.addEventListener('keydown', event => {
+  if (['1', '2', '3', '4'].includes(event.key) && !answered) {
+    const choice = document.querySelectorAll('.choice')[Number(event.key) - 1];
+    if (choice && !choice.disabled) choice.click();
+  } else if (event.key === 'Enter' && answered && !$('nextButton').disabled) {
+    $('nextButton').click();
+  }
+});
 
 setToday();
 setActiveLevelButtons();
